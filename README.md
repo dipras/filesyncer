@@ -1,5 +1,9 @@
 # FileSyncer 🚀
 
+[![npm version](https://badge.fury.io/js/filesyncer.svg)](https://www.npmjs.com/package/filesyncer)
+[![CI](https://github.com/dipras/filesyncer/workflows/CI/badge.svg)](https://github.com/dipras/filesyncer/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 **Real-time file synchronization tool for remote development workflows**
 
 FileSyncer is a CLI tool that enables developers to automatically sync files from their local environment to remote servers via SSH. Perfect for development workflows with VPS or remote servers.
@@ -226,6 +230,48 @@ brew install rsync
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+### Development Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/dipras/filesyncer.git
+cd filesyncer
+
+# Install dependencies
+npm install
+
+# Build
+npm run build
+
+# Test locally
+npm link
+filesyncer --help
+```
+
+### Automated Publishing
+
+This project uses GitHub Actions for automated publishing to NPM:
+
+- **CI Workflow**: Runs on every push/PR to test the build
+- **Publish Workflow**: Automatically publishes to NPM when you push a version tag
+
+To publish a new version:
+
+```bash
+# Update version in package.json
+npm version patch  # or minor, or major
+
+# Push with tags
+git push && git push --tags
+
+# GitHub Actions will automatically publish to NPM
+```
+
+**Setup Required** (one-time):
+1. Get your NPM access token from [npmjs.com/settings/tokens](https://www.npmjs.com/settings/tokens)
+2. Add it as `NPM_TOKEN` secret in your GitHub repository settings
+3. Go to: Settings → Secrets and variables → Actions → New repository secret
 
 ## 📄 License
 
