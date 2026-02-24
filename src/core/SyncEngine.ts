@@ -80,9 +80,13 @@ export class SyncEngine {
   private buildRsyncArgs(): string[] {
     const args = [
       '-avz', // archive, verbose, compress
-      '--delete', // delete files that don't exist in source
       '--progress'
     ];
+
+    // Only delete remote files if explicitly enabled (DANGEROUS!)
+    if (this.config.deleteRemoteFiles) {
+      args.push('--delete');
+    }
 
     // Add SSH configuration
     const sshArgs = [`ssh -p ${this.config.port || 22}`];

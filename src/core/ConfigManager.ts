@@ -56,7 +56,8 @@ export class ConfigManager {
       useGitTracking: false,
       debounceMs: 1000,
       syncMethod: 'rsync',
-      excludeFromGitIgnore: true
+      excludeFromGitIgnore: true,
+      deleteRemoteFiles: false
     };
 
     this.save(defaultConfig);

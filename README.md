@@ -130,6 +130,33 @@ Sync all files once without watching.
 | `debounceMs` | number | `1000` | Debounce delay (ms) |
 | `syncMethod` | string | `"rsync"` | Transfer method: `"rsync"` or `"scp"` |
 | `excludeFromGitIgnore` | boolean | `true` | Automatically exclude files from `.gitignore` |
+| `deleteRemoteFiles` | boolean | `false` | ⚠️ **DANGEROUS**: Delete files on remote that don't exist locally |
+
+### ⚠️ Important: `deleteRemoteFiles` Warning
+
+**Default: `false`** - By default, FileSyncer will NOT delete any files on your remote server.
+
+Setting `deleteRemoteFiles: true` is **dangerous** because:
+- It will **delete** any files on the remote server that don't exist in your local source
+- Server-generated files (uploads, logs, cache, etc.) will be **permanently deleted**
+- Backup files and configs on the server will be **removed**
+
+**Only enable this if:**
+- You want complete mirror sync (local → remote)
+- You're **absolutely sure** what you're doing
+- You have **backups** of important server files
+
+**Recommended approach:**
+```json
+{
+  "deleteRemoteFiles": false,  // Keep this false!
+  "ignorePatterns": [
+    "uploads/**",    // Don't sync server uploads
+    "storage/**",    // Don't sync server storage
+    "logs/**",       // Don't sync server logs
+    ".env"          // Don't overwrite server .env
+  ]
+}
 
 ## 🎯 Use Cases
 

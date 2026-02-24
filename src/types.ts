@@ -10,6 +10,7 @@ export interface SyncConfig {
   debounceMs?: number;
   syncMethod?: 'rsync' | 'scp';
   excludeFromGitIgnore?: boolean;
+  deleteRemoteFiles?: boolean;
 }
 
 export interface FileChangeEvent {

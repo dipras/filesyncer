@@ -8,11 +8,7 @@
   "ignorePatterns": [
     "node_modules/**",
     "dist/**",
-    ".git/**",
-    "*.log",
-    ".env",
-    "uploads/**",
-    "storage/**"
+    ".git/**"
   ],
   "useGitTracking": false,
   "debounceMs": 1000,
