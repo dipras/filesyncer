@@ -1,0 +1,19 @@
+{
+  "source": ".",
+  "destination": "/var/www/app",
+  "host": "example.com",
+  "username": "user",
+  "port": 22,
+  "privateKeyPath": "~/.ssh/id_rsa",
+  "ignorePatterns": [
+    "node_modules/**",
+    "dist/**",
+    ".git/**",
+    "*.log",
+    ".env"
+  ],
+  "useGitTracking": false,
+  "debounceMs": 1000,
+  "syncMethod": "rsync",
+  "excludeFromGitIgnore": true
+}

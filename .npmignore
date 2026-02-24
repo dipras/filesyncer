@@ -1,0 +1,35 @@
+# Source files
+src/
+tsconfig.json
+
+# Development files
+*.log
+*.tgz
+.vscode/
+.idea/
+
+# Git
+.git/
+.gitignore
+
+# Documentation (keep README.md, remove detailed docs)
+PROJECT_SUMMARY.md
+PUBLISHING.md
+QUICKSTART.md
+
+# Test files
+test/
+*.test.ts
+*.spec.ts
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Misc
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
