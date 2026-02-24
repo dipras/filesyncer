@@ -1,5 +1,5 @@
 {
-  "name": "filesyncer",
+  "name": "@dipras/filesyncer",
   "version": "1.0.0",
   "description": "Real-time file synchronization tool for remote development workflows. Automatically sync your local code to remote servers via SSH.",
   "license": "MIT",
