@@ -73,6 +73,14 @@ program
       }
       spinner.succeed('Connected to remote server');
 
+      // Warning if deleteRemoteFiles is enabled
+      if (config.deleteRemoteFiles) {
+        console.log();
+        console.log(chalk.yellow('⚠️  WARNING: deleteRemoteFiles is ENABLED!'));
+        console.log(chalk.yellow('   Files on remote server that don\'t exist locally will be DELETED.'));
+        console.log(chalk.yellow('   Make sure you have backups!'));
+      }
+
       // Start watcher
       const baseDir = resolve(config.source);
       const watcher = new FileWatcher(config, baseDir);
@@ -141,6 +149,15 @@ program
         process.exit(1);
       }
       spinner.succeed('Connected');
+
+      // Warning if deleteRemoteFiles is enabled
+      if (config.deleteRemoteFiles) {
+        console.log();
+        console.log(chalk.yellow('⚠️  WARNING: deleteRemoteFiles is ENABLED!'));
+        console.log(chalk.yellow('   Files on remote server that don\'t exist locally will be DELETED.'));
+        console.log(chalk.yellow('   This cannot be undone!'));
+        console.log();
+      }
 
       // Sync
       spinner.start('Deploying files...');

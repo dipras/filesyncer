@@ -104,7 +104,11 @@ filesyncer watch
 filesyncer watch --config custom-sync.json
 ```
 
-Auto-sync whenever files change.
+**Watch mode behavior:**
+- Monitors file changes in real-time
+- Syncs **only the files that changed** (not full sync)
+- Efficient for continuous development
+- Each file change triggers individual rsync of that specific file
 
 #### `deploy` - One-Time Full Sync
 
@@ -113,7 +117,11 @@ filesyncer deploy
 filesyncer deploy --config custom-sync.json
 ```
 
-Sync all files once without watching.
+**Deploy mode behavior:**
+- Syncs **all files** from source to destination
+- Uses full directory rsync
+- Ideal for initial deployment or complete updates
+- Respects all ignore patterns and exclusions
 
 ## ⚙️ Configuration Options
 

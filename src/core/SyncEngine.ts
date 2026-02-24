@@ -42,6 +42,12 @@ export class SyncEngine {
    * Sync using rsync (recommended)
    */
   private async syncWithRsync(events?: FileChangeEvent[]): Promise<void> {
+    // If events provided (watch mode), sync only changed files
+    if (events && events.length > 0) {
+      return this.syncSpecificFiles(events);
+    }
+    
+    // Otherwise, do full sync (deploy mode)
     const args = this.buildRsyncArgs();
 
     return new Promise((resolve, reject) => {
@@ -70,6 +76,80 @@ export class SyncEngine {
 
       rsync.on('error', (error) => {
         reject(new Error(`Failed to start rsync: ${error.message}`));
+      });
+    });
+  }
+
+  /**
+   * Sync specific files only (watch mode)
+   */
+  private async syncSpecificFiles(events: FileChangeEvent[]): Promise<void> {
+    // Filter out delete events for rsync (we don't delete by default)
+    const filesToSync = events.filter(e => 
+      e.type === 'add' || e.type === 'change'
+    );
+
+    if (filesToSync.length === 0) {
+      return; // Nothing to sync
+    }
+
+    // Sync each file individually using rsync
+    const promises = filesToSync.map(event => 
+      this.rsyncSingleFile(event.path)
+    );
+
+    await Promise.all(promises);
+  }
+
+  /**
+   * Sync single file with rsync
+   */
+  private async rsyncSingleFile(relativePath: string): Promise<void> {
+    const sourcePath = join(this.config.source, relativePath);
+    
+    if (!existsSync(sourcePath)) {
+      // File might have been deleted, skip
+      return;
+    }
+
+    const args = [
+      '-avz', // archive, verbose, compress
+      '--relative' // Preserve directory structure
+    ];
+
+    // Add SSH configuration
+    const sshArgs = [`ssh -p ${this.config.port || 22}`];
+    if (this.config.privateKeyPath) {
+      sshArgs.push(`-i ${this.config.privateKeyPath}`);
+    }
+    args.push('-e', sshArgs.join(' '));
+
+    // Source (with ./ prefix for --relative)
+    const sourceBase = resolve(this.config.source);
+    args.push(`${sourceBase}/./${relativePath}`);
+
+    // Destination
+    const destination = `${this.config.username}@${this.config.host}:${this.config.destination}`;
+    args.push(destination);
+
+    return new Promise((resolve, reject) => {
+      const rsync = spawn('rsync', args, { stdio: 'pipe' });
+
+      let errorOutput = '';
+      rsync.stderr.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+
+      rsync.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`rsync failed for ${relativePath}: ${errorOutput}`));
+        }
+      });
+
+      rsync.on('error', (error) => {
+        reject(new Error(`Failed to rsync ${relativePath}: ${error.message}`));
       });
     });
   }
