@@ -1,9 +1,13 @@
 import { spawn } from 'child_process';
-import { resolve, join } from 'path';
-import { existsSync, statSync } from 'fs';
+import { resolve, join, posix, relative } from 'path';
+import { existsSync, readdirSync } from 'fs';
 import type { SyncConfig, FileChangeEvent, SyncResult } from '../types.js';
+import { IgnoreFilter } from '../utils/IgnoreFilter.js';
+import { GitTracker } from '../utils/GitTracker.js';
 
 export class SyncEngine {
+  private readonly maxConcurrentTransfers = 5;
+
   constructor(private config: SyncConfig) {}
 
   /**
@@ -44,61 +48,37 @@ export class SyncEngine {
   private async syncWithRsync(events?: FileChangeEvent[]): Promise<void> {
     // If events provided (watch mode), sync only changed files
     if (events && events.length > 0) {
-      return this.syncSpecificFiles(events);
+      return this.syncSpecificFilesWithRsync(events);
     }
     
     // Otherwise, do full sync (deploy mode)
     const args = this.buildRsyncArgs();
 
-    return new Promise((resolve, reject) => {
-      const rsync = spawn('rsync', args, {
-        stdio: 'pipe'
-      });
-
-      let output = '';
-      let errorOutput = '';
-
-      rsync.stdout.on('data', (data) => {
-        output += data.toString();
-      });
-
-      rsync.stderr.on('data', (data) => {
-        errorOutput += data.toString();
-      });
-
-      rsync.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`rsync failed with code ${code}: ${errorOutput}`));
-        }
-      });
-
-      rsync.on('error', (error) => {
-        reject(new Error(`Failed to start rsync: ${error.message}`));
-      });
-    });
+    await this.execCommand('rsync', args, 'rsync failed');
   }
 
   /**
    * Sync specific files only (watch mode)
    */
-  private async syncSpecificFiles(events: FileChangeEvent[]): Promise<void> {
-    // Filter out delete events for rsync (we don't delete by default)
-    const filesToSync = events.filter(e => 
+  private async syncSpecificFilesWithRsync(events: FileChangeEvent[]): Promise<void> {
+    const filesToSync = events.filter(e =>
       e.type === 'add' || e.type === 'change'
     );
-
-    if (filesToSync.length === 0) {
-      return; // Nothing to sync
-    }
-
-    // Sync each file individually using rsync
-    const promises = filesToSync.map(event => 
-      this.rsyncSingleFile(event.path)
+    const filesToDelete = events.filter(e =>
+      e.type === 'unlink' || e.type === 'unlinkDir'
     );
 
-    await Promise.all(promises);
+    if (filesToSync.length > 0) {
+      await this.runWithConcurrency(filesToSync, this.maxConcurrentTransfers, async (event) => {
+        await this.rsyncSingleFile(event.path);
+      });
+    }
+
+    if (this.config.deleteRemoteFiles && filesToDelete.length > 0) {
+      await this.runWithConcurrency(filesToDelete, this.maxConcurrentTransfers, async (event) => {
+        await this.deleteRemotePath(event.path, event.type === 'unlinkDir');
+      });
+    }
   }
 
   /**
@@ -126,32 +106,14 @@ export class SyncEngine {
 
     // Source (with ./ prefix for --relative)
     const sourceBase = resolve(this.config.source);
-    args.push(`${sourceBase}/./${relativePath}`);
+    const normalizedPath = this.normalizeRemotePath(relativePath);
+    args.push(`${sourceBase}/./${normalizedPath}`);
 
     // Destination
     const destination = `${this.config.username}@${this.config.host}:${this.config.destination}`;
     args.push(destination);
 
-    return new Promise((resolve, reject) => {
-      const rsync = spawn('rsync', args, { stdio: 'pipe' });
-
-      let errorOutput = '';
-      rsync.stderr.on('data', (data) => {
-        errorOutput += data.toString();
-      });
-
-      rsync.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`rsync failed for ${relativePath}: ${errorOutput}`));
-        }
-      });
-
-      rsync.on('error', (error) => {
-        reject(new Error(`Failed to rsync ${relativePath}: ${error.message}`));
-      });
-    });
+    await this.execCommand('rsync', args, `rsync failed for ${relativePath}`);
   }
 
   /**
@@ -181,6 +143,14 @@ export class SyncEngine {
       args.push('--exclude', pattern);
     }
 
+    // Optionally include .gitignore patterns for deploy
+    if (this.config.excludeFromGitIgnore !== false) {
+      const gitignorePath = resolve(this.config.source, '.gitignore');
+      if (existsSync(gitignorePath)) {
+        args.push('--exclude-from', gitignorePath);
+      }
+    }
+
     // Always exclude .git
     args.push('--exclude', '.git');
 
@@ -200,23 +170,84 @@ export class SyncEngine {
    */
   private async syncWithScp(events?: FileChangeEvent[]): Promise<void> {
     if (!events || events.length === 0) {
-      throw new Error('SCP sync requires specific file events');
+      await this.fullScpDeploy();
+      return;
     }
 
-    // Filter out delete events (SCP can't delete)
-    const filesToSync = events.filter(e => 
+    const filesToSync = events.filter(e =>
       e.type === 'add' || e.type === 'change'
     );
-
-    if (filesToSync.length === 0) {
-      return; // Nothing to sync
-    }
-
-    const promises = filesToSync.map(event => 
-      this.scpFile(event.path)
+    const filesToDelete = events.filter(e =>
+      e.type === 'unlink' || e.type === 'unlinkDir'
     );
 
-    await Promise.all(promises);
+    if (filesToSync.length > 0) {
+      await this.runWithConcurrency(filesToSync, this.maxConcurrentTransfers, async (event) => {
+        await this.scpFile(event.path);
+      });
+    }
+
+    if (this.config.deleteRemoteFiles && filesToDelete.length > 0) {
+      await this.runWithConcurrency(filesToDelete, this.maxConcurrentTransfers, async (event) => {
+        await this.deleteRemotePath(event.path, event.type === 'unlinkDir');
+      });
+    }
+  }
+
+  /**
+   * Full deploy with SCP
+   */
+  private async fullScpDeploy(): Promise<void> {
+    const files = await this.collectFilesForFullDeploy();
+    if (files.length === 0) return;
+
+    await this.runWithConcurrency(files, this.maxConcurrentTransfers, async (filePath) => {
+      await this.scpFile(filePath);
+    });
+  }
+
+  /**
+   * Collect files for full deploy while respecting ignore and git tracking options
+   */
+  private async collectFilesForFullDeploy(): Promise<string[]> {
+    const sourceBase = resolve(this.config.source);
+    const ignoreFilter = new IgnoreFilter(
+      sourceBase,
+      this.config.ignorePatterns || [],
+      this.config.excludeFromGitIgnore !== false
+    );
+
+    const files: string[] = [];
+    const stack: string[] = [sourceBase];
+
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) continue;
+
+      const entries = readdirSync(current, { withFileTypes: true });
+      for (const entry of entries) {
+        const absolutePath = join(current, entry.name);
+        const relativePath = this.normalizeRemotePath(relative(sourceBase, absolutePath));
+
+        if (ignoreFilter.shouldIgnore(relativePath)) {
+          continue;
+        }
+
+        if (entry.isDirectory()) {
+          stack.push(absolutePath);
+        } else if (entry.isFile()) {
+          files.push(relativePath);
+        }
+      }
+    }
+
+    if (this.config.useGitTracking) {
+      const tracker = new GitTracker(sourceBase);
+      const tracked = new Set((await tracker.getTrackedFiles()).map((f) => this.normalizeRemotePath(f)));
+      return files.filter((file) => tracked.has(file));
+    }
+
+    return files;
   }
 
   /**
@@ -229,6 +260,12 @@ export class SyncEngine {
       throw new Error(`File not found: ${sourcePath}`);
     }
 
+    const normalizedPath = this.normalizeRemotePath(filePath);
+    const remotePath = posix.join(this.config.destination, normalizedPath);
+    const remoteDir = posix.dirname(remotePath);
+
+    await this.ensureRemoteDirectory(remoteDir);
+
     const args = [
       '-P', String(this.config.port || 22)
     ];
@@ -239,30 +276,119 @@ export class SyncEngine {
 
     args.push(
       sourcePath,
-      `${this.config.username}@${this.config.host}:${join(this.config.destination, filePath)}`
+      `${this.config.username}@${this.config.host}:${remotePath}`
     );
 
-    return new Promise((resolve, reject) => {
-      const scp = spawn('scp', args, { stdio: 'pipe' });
+    await this.execCommand('scp', args, `scp failed for ${filePath}`);
+  }
 
+  /**
+   * Ensure remote directory exists
+   */
+  private async ensureRemoteDirectory(remoteDir: string): Promise<void> {
+    const command = `mkdir -p ${this.shellQuote(remoteDir)}`;
+    await this.sshExec(command);
+  }
+
+  /**
+   * Delete path on remote server
+   */
+  private async deleteRemotePath(relativePath: string, isDir: boolean): Promise<void> {
+    const normalizedPath = this.normalizeRemotePath(relativePath);
+    const remotePath = posix.join(this.config.destination, normalizedPath);
+    const command = isDir
+      ? `rm -rf ${this.shellQuote(remotePath)}`
+      : `rm -f ${this.shellQuote(remotePath)}`;
+
+    await this.sshExec(command);
+  }
+
+  /**
+   * Execute command via SSH
+   */
+  private async sshExec(command: string): Promise<void> {
+    const args = [
+      ...this.buildSshBaseArgs(),
+      `${this.config.username}@${this.config.host}`,
+      command
+    ];
+
+    await this.execCommand('ssh', args, 'SSH command failed');
+  }
+
+  /**
+   * Common SSH args
+   */
+  private buildSshBaseArgs(): string[] {
+    const args = ['-p', String(this.config.port || 22), '-o', 'BatchMode=yes'];
+
+    if (this.config.privateKeyPath) {
+      args.push('-i', this.config.privateKeyPath);
+    }
+
+    return args;
+  }
+
+  /**
+   * Execute child process with captured stderr
+   */
+  private async execCommand(bin: string, args: string[], errorPrefix: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(bin, args, { stdio: 'pipe' });
       let errorOutput = '';
 
-      scp.stderr.on('data', (data) => {
+      child.stderr.on('data', (data) => {
         errorOutput += data.toString();
       });
 
-      scp.on('close', (code) => {
+      child.on('close', (code) => {
         if (code === 0) {
           resolve();
         } else {
-          reject(new Error(`scp failed with code ${code}: ${errorOutput}`));
+          reject(new Error(`${errorPrefix}: ${errorOutput || `exit code ${code}`}`));
         }
       });
 
-      scp.on('error', (error) => {
-        reject(new Error(`Failed to start scp: ${error.message}`));
+      child.on('error', (error) => {
+        reject(new Error(`${errorPrefix}: ${error.message}`));
       });
     });
+  }
+
+  /**
+   * Run array jobs with concurrency limit
+   */
+  private async runWithConcurrency<T>(
+    items: T[],
+    concurrency: number,
+    worker: (item: T) => Promise<void>
+  ): Promise<void> {
+    if (items.length === 0) return;
+
+    let index = 0;
+    const workers = new Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
+      while (index < items.length) {
+        const currentIndex = index;
+        index += 1;
+        await worker(items[currentIndex]);
+      }
+    });
+
+    await Promise.all(workers);
+  }
+
+  /**
+   * Normalize file path for remote POSIX shells
+   */
+  private normalizeRemotePath(pathValue: string): string {
+    return pathValue.replace(/\\/g, '/').replace(/^\.\//, '');
+  }
+
+  /**
+   * Quote value for safe single-quoted shell usage
+   */
+  private shellQuote(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
   }
 
   /**
@@ -271,14 +397,10 @@ export class SyncEngine {
   async testConnection(): Promise<boolean> {
     return new Promise((resolve) => {
       const args = [
-        '-p', String(this.config.port || 22),
+        ...this.buildSshBaseArgs(),
         '-o', 'ConnectTimeout=5',
-        '-o', 'BatchMode=yes'
+        '-o', 'StrictHostKeyChecking=accept-new'
       ];
-
-      if (this.config.privateKeyPath) {
-        args.push('-i', this.config.privateKeyPath);
-      }
 
       args.push(
         `${this.config.username}@${this.config.host}`,

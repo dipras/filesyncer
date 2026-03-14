@@ -5,7 +5,11 @@ import ignore from 'ignore';
 export class IgnoreFilter {
   private ig: ReturnType<typeof ignore>;
 
-  constructor(baseDir: string, customPatterns: string[] = []) {
+  constructor(
+    baseDir: string,
+    customPatterns: string[] = [],
+    includeGitIgnore: boolean = true
+  ) {
     this.ig = ignore();
 
     // Add custom patterns
@@ -13,14 +17,16 @@ export class IgnoreFilter {
       this.ig.add(customPatterns);
     }
 
-    // Load .gitignore if exists
-    const gitignorePath = join(baseDir, '.gitignore');
-    if (existsSync(gitignorePath)) {
-      try {
-        const gitignoreContent = readFileSync(gitignorePath, 'utf-8');
-        this.ig.add(gitignoreContent);
-      } catch (error) {
-        console.warn('Failed to read .gitignore:', error);
+    // Load .gitignore if enabled and exists
+    if (includeGitIgnore) {
+      const gitignorePath = join(baseDir, '.gitignore');
+      if (existsSync(gitignorePath)) {
+        try {
+          const gitignoreContent = readFileSync(gitignorePath, 'utf-8');
+          this.ig.add(gitignoreContent);
+        } catch (error) {
+          console.warn('Failed to read .gitignore:', error);
+        }
       }
     }
 

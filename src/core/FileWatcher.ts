@@ -11,7 +11,8 @@ export class FileWatcher {
   private changeQueue: Map<string, FileChangeEvent> = new Map();
   private debounceTimer: NodeJS.Timeout | null = null;
   private debounceMs: number;
-  private onChangeCallback?: (events: FileChangeEvent[]) => void;
+  private onChangeCallback?: (events: FileChangeEvent[]) => Promise<void> | void;
+  private isProcessing: boolean = false;
 
   constructor(
     private config: SyncConfig,
@@ -21,14 +22,14 @@ export class FileWatcher {
     
     // Initialize filters
     const ignorePatterns = config.ignorePatterns || [];
-    this.ignoreFilter = new IgnoreFilter(baseDir, ignorePatterns);
+    this.ignoreFilter = new IgnoreFilter(baseDir, ignorePatterns, config.excludeFromGitIgnore !== false);
     this.gitTracker = new GitTracker(baseDir);
   }
 
   /**
    * Start watching files
    */
-  async start(onChange: (events: FileChangeEvent[]) => void): Promise<void> {
+  async start(onChange: (events: FileChangeEvent[]) => Promise<void> | void): Promise<void> {
     this.onChangeCallback = onChange;
 
     // Prepare ignore patterns for chokidar
@@ -69,7 +70,7 @@ export class FileWatcher {
     const relativePath = relative(this.baseDir, absolutePath);
 
     // Check if file should be ignored
-    if (this.config.excludeFromGitIgnore && this.ignoreFilter.shouldIgnore(relativePath)) {
+    if (this.ignoreFilter.shouldIgnore(relativePath)) {
       return;
     }
 
@@ -96,21 +97,33 @@ export class FileWatcher {
     }
 
     this.debounceTimer = setTimeout(() => {
-      this.processQueue();
+      void this.processQueue();
     }, this.debounceMs);
   }
 
   /**
    * Process queued changes
    */
-  private processQueue(): void {
+  private async processQueue(): Promise<void> {
+    if (this.isProcessing) return;
     if (this.changeQueue.size === 0) return;
 
+    this.isProcessing = true;
     const events = Array.from(this.changeQueue.values());
     this.changeQueue.clear();
 
-    if (this.onChangeCallback) {
-      this.onChangeCallback(events);
+    try {
+      if (this.onChangeCallback) {
+        await this.onChangeCallback(events);
+      }
+    } catch (error) {
+      console.error('Failed to process file changes:', error);
+    } finally {
+      this.isProcessing = false;
+    }
+
+    if (this.changeQueue.size > 0) {
+      await this.processQueue();
     }
   }
 

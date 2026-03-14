@@ -165,6 +165,7 @@ Setting `deleteRemoteFiles: true` is **dangerous** because:
     ".env"          // Don't overwrite server .env
   ]
 }
+```
 
 ## 🎯 Use Cases
 
@@ -310,7 +311,7 @@ git push && git push --tags
 
 ## 📄 License
 
-ISC © Dipras
+MIT © Dipras
 
 ## 💡 Inspiration
 
