@@ -3,6 +3,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import ora from 'ora';
+import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { ConfigManager } from './core/ConfigManager.js';
 import { FileWatcher } from './core/FileWatcher.js';
@@ -11,10 +12,20 @@ import type { FileChangeEvent } from './types.js';
 
 const program = new Command();
 
+function getCliVersion(): string {
+  try {
+    const packageJsonPath = new URL('../package.json', import.meta.url);
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { version?: string };
+    return packageJson.version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 program
   .name('filesyncer')
   .description('Real-time file synchronization tool for development')
-  .version('1.1.1');
+  .version(getCliVersion(), '-v, --version', 'output the current version');
 
 /**
  * Init Command - Create configuration file
