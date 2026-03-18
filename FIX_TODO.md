@@ -61,6 +61,64 @@ Scope: Level 1 stabilization
     - package.json
     - README.md#L313
 
+## Re-audit 2026-03-18 (new findings)
+
+Status: open
+
+### P0 - Fatal
+
+- [x] `privateKeyPath` default `~/.ssh/id_rsa` tidak diexpand pada `ssh/scp` (spawn tanpa shell)
+  - Dampak: koneksi bisa gagal walau key valid (karena path literal `~` dianggap nama folder).
+  - Root cause: path key dipakai langsung tanpa resolve/expand sebelum dipassing ke argumen `-i`.
+  - References:
+    - src/core/ConfigManager.ts#L54
+    - src/core/SyncEngine.ts#L273-L274
+    - src/core/SyncEngine.ts#L322-L328
+    - src/core/SyncEngine.ts#L377-L388
+
+### P1 - High
+
+- [x] `useGitTracking` tidak konsisten: berlaku di SCP deploy, tidak berlaku di rsync deploy
+  - Dampak: behavior berbeda antar `syncMethod`, bisa bikin file untracked ikut terdeploy saat rsync.
+  - Root cause: `syncWithRsync()` deploy mode langsung full rsync dari source; filter Git-tracked hanya ada di jalur `collectFilesForFullDeploy()` (SCP).
+  - References:
+    - src/core/SyncEngine.ts#L48-L57
+    - src/core/SyncEngine.ts#L200-L249
+    - README.md#L137
+
+- [ ] Belum ada automated test yang jalan di CI/local
+  - Dampak: regresi mudah lolos, terutama flow SSH/rsync/scp dan watcher.
+  - Root cause: script `test` masih placeholder yang selalu fail.
+  - References:
+    - package.json#L22
+    - TEST_SCENARIOS.md
+
+### P2 - Medium
+
+- [x] `filesChanged` pada deploy selalu `0` walau full sync sukses
+  - Dampak: observability/reporting tidak akurat.
+  - Root cause: nilai `filesChanged` diambil dari `events?.length`, sementara deploy memanggil `sync()` tanpa events.
+  - References:
+    - src/core/SyncEngine.ts#L30
+    - src/cli.ts#L170
+
+- [x] `addDir` event terdeteksi watcher, tapi tidak ditangani sync engine dan icon log salah
+  - Dampak: log bisa misleading (`addDir` ditampilkan ikon delete), dan empty dir baru tidak dipropagasi eksplisit.
+  - Root cause: mapping icon di CLI hanya kenal `add/change/else`, sedangkan sync engine hanya memproses `add/change/unlink/unlinkDir`.
+  - References:
+    - src/core/FileWatcher.ts#L56
+    - src/core/SyncEngine.ts#L61-L76
+    - src/cli.ts#L109
+
+### Docs / Release Hygiene
+
+- [x] `CHANGELOG.md` belum mencerminkan versi terbaru package
+  - Dampak: release notes membingungkan user/contributor.
+  - Root cause: changelog terakhir di `1.0.2`, sedangkan package sudah `1.2.0`.
+  - References:
+    - CHANGELOG.md#L5
+    - package.json#L3
+
 ---
 
 ## Suggested execution order

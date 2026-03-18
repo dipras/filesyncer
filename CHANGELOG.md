@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-03-18
+
+### Fixed
+- Expand `privateKeyPath` values that use `~` before passing to `ssh`/`scp`.
+- Keep `useGitTracking` behavior consistent for deploy mode on `rsync` and `scp`.
+- Handle directory-create events (`addDir`) in watch sync flows.
+- Improve deploy reporting so `filesChanged` reflects synced files (instead of always `0`).
+- Improve watch output icon mapping for directory events.
+
+### Changed
+- Version bump to `1.2.1`.
+
 ## [1.0.2] - 2026-02-24
 
 ### Added

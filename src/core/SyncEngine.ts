@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { resolve, join, posix, relative } from 'path';
 import { existsSync, readdirSync } from 'fs';
+import { homedir } from 'os';
 import type { SyncConfig, FileChangeEvent, SyncResult } from '../types.js';
 import { IgnoreFilter } from '../utils/IgnoreFilter.js';
 import { GitTracker } from '../utils/GitTracker.js';
@@ -18,16 +19,14 @@ export class SyncEngine {
     const errors: string[] = [];
 
     try {
-      if (this.config.syncMethod === 'scp') {
-        await this.syncWithScp(events);
-      } else {
-        await this.syncWithRsync(events);
-      }
+      const filesChanged = this.config.syncMethod === 'scp'
+        ? await this.syncWithScp(events)
+        : await this.syncWithRsync(events);
 
       const duration = Date.now() - startTime;
       return {
         success: true,
-        filesChanged: events?.length || 0,
+        filesChanged,
         duration
       };
     } catch (error) {
@@ -45,28 +44,49 @@ export class SyncEngine {
   /**
    * Sync using rsync (recommended)
    */
-  private async syncWithRsync(events?: FileChangeEvent[]): Promise<void> {
+  private async syncWithRsync(events?: FileChangeEvent[]): Promise<number> {
     // If events provided (watch mode), sync only changed files
     if (events && events.length > 0) {
       return this.syncSpecificFilesWithRsync(events);
     }
+
+    // If Git tracking is enabled, keep behavior consistent with SCP deploy
+    if (this.config.useGitTracking) {
+      const trackedFiles = await this.collectFilesForFullDeploy();
+      await this.runWithConcurrency(trackedFiles, this.maxConcurrentTransfers, async (filePath) => {
+        await this.rsyncSingleFile(filePath);
+      });
+      return trackedFiles.length;
+    }
+
+    const files = await this.collectFilesForFullDeploy();
     
     // Otherwise, do full sync (deploy mode)
     const args = this.buildRsyncArgs();
 
     await this.execCommand('rsync', args, 'rsync failed');
+    return files.length;
   }
 
   /**
    * Sync specific files only (watch mode)
    */
-  private async syncSpecificFilesWithRsync(events: FileChangeEvent[]): Promise<void> {
+  private async syncSpecificFilesWithRsync(events: FileChangeEvent[]): Promise<number> {
+    const directoriesToCreate = events.filter(e => e.type === 'addDir');
     const filesToSync = events.filter(e =>
       e.type === 'add' || e.type === 'change'
     );
     const filesToDelete = events.filter(e =>
       e.type === 'unlink' || e.type === 'unlinkDir'
     );
+
+    if (directoriesToCreate.length > 0) {
+      await this.runWithConcurrency(directoriesToCreate, this.maxConcurrentTransfers, async (event) => {
+        const normalizedPath = this.normalizeRemotePath(event.path);
+        const remoteDir = posix.join(this.config.destination, normalizedPath);
+        await this.ensureRemoteDirectory(remoteDir);
+      });
+    }
 
     if (filesToSync.length > 0) {
       await this.runWithConcurrency(filesToSync, this.maxConcurrentTransfers, async (event) => {
@@ -79,6 +99,9 @@ export class SyncEngine {
         await this.deleteRemotePath(event.path, event.type === 'unlinkDir');
       });
     }
+
+    const deletedCount = this.config.deleteRemoteFiles ? filesToDelete.length : 0;
+    return directoriesToCreate.length + filesToSync.length + deletedCount;
   }
 
   /**
@@ -99,8 +122,9 @@ export class SyncEngine {
 
     // Add SSH configuration
     const sshArgs = [`ssh -p ${this.config.port || 22}`];
-    if (this.config.privateKeyPath) {
-      sshArgs.push(`-i ${this.config.privateKeyPath}`);
+    const privateKeyPath = this.resolvePrivateKeyPath();
+    if (privateKeyPath) {
+      sshArgs.push(`-i ${this.shellQuote(privateKeyPath)}`);
     }
     args.push('-e', sshArgs.join(' '));
 
@@ -132,8 +156,9 @@ export class SyncEngine {
 
     // Add SSH configuration
     const sshArgs = [`ssh -p ${this.config.port || 22}`];
-    if (this.config.privateKeyPath) {
-      sshArgs.push(`-i ${this.config.privateKeyPath}`);
+    const privateKeyPath = this.resolvePrivateKeyPath();
+    if (privateKeyPath) {
+      sshArgs.push(`-i ${this.shellQuote(privateKeyPath)}`);
     }
     args.push('-e', sshArgs.join(' '));
 
@@ -168,11 +193,12 @@ export class SyncEngine {
   /**
    * Sync using SCP (fallback)
    */
-  private async syncWithScp(events?: FileChangeEvent[]): Promise<void> {
+  private async syncWithScp(events?: FileChangeEvent[]): Promise<number> {
     if (!events || events.length === 0) {
-      await this.fullScpDeploy();
-      return;
+      return this.fullScpDeploy();
     }
+
+    const directoriesToCreate = events.filter(e => e.type === 'addDir');
 
     const filesToSync = events.filter(e =>
       e.type === 'add' || e.type === 'change'
@@ -180,6 +206,14 @@ export class SyncEngine {
     const filesToDelete = events.filter(e =>
       e.type === 'unlink' || e.type === 'unlinkDir'
     );
+
+    if (directoriesToCreate.length > 0) {
+      await this.runWithConcurrency(directoriesToCreate, this.maxConcurrentTransfers, async (event) => {
+        const normalizedPath = this.normalizeRemotePath(event.path);
+        const remoteDir = posix.join(this.config.destination, normalizedPath);
+        await this.ensureRemoteDirectory(remoteDir);
+      });
+    }
 
     if (filesToSync.length > 0) {
       await this.runWithConcurrency(filesToSync, this.maxConcurrentTransfers, async (event) => {
@@ -192,18 +226,23 @@ export class SyncEngine {
         await this.deleteRemotePath(event.path, event.type === 'unlinkDir');
       });
     }
+
+    const deletedCount = this.config.deleteRemoteFiles ? filesToDelete.length : 0;
+    return directoriesToCreate.length + filesToSync.length + deletedCount;
   }
 
   /**
    * Full deploy with SCP
    */
-  private async fullScpDeploy(): Promise<void> {
+  private async fullScpDeploy(): Promise<number> {
     const files = await this.collectFilesForFullDeploy();
-    if (files.length === 0) return;
+    if (files.length === 0) return 0;
 
     await this.runWithConcurrency(files, this.maxConcurrentTransfers, async (filePath) => {
       await this.scpFile(filePath);
     });
+
+    return files.length;
   }
 
   /**
@@ -270,8 +309,9 @@ export class SyncEngine {
       '-P', String(this.config.port || 22)
     ];
 
-    if (this.config.privateKeyPath) {
-      args.push('-i', this.config.privateKeyPath);
+    const privateKeyPath = this.resolvePrivateKeyPath();
+    if (privateKeyPath) {
+      args.push('-i', privateKeyPath);
     }
 
     args.push(
@@ -322,11 +362,30 @@ export class SyncEngine {
   private buildSshBaseArgs(): string[] {
     const args = ['-p', String(this.config.port || 22), '-o', 'BatchMode=yes'];
 
-    if (this.config.privateKeyPath) {
-      args.push('-i', this.config.privateKeyPath);
+    const privateKeyPath = this.resolvePrivateKeyPath();
+    if (privateKeyPath) {
+      args.push('-i', privateKeyPath);
     }
 
     return args;
+  }
+
+  /**
+   * Resolve SSH private key path (supports ~/)
+   */
+  private resolvePrivateKeyPath(): string | undefined {
+    const rawPath = this.config.privateKeyPath?.trim();
+    if (!rawPath) return undefined;
+
+    if (rawPath === '~') {
+      return homedir();
+    }
+
+    if (rawPath.startsWith('~/')) {
+      return resolve(homedir(), rawPath.slice(2));
+    }
+
+    return resolve(rawPath);
   }
 
   /**

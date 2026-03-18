@@ -106,7 +106,11 @@ program
       await watcher.start(async (events: FileChangeEvent[]) => {
         console.log(chalk.blue(`\n📦 ${events.length} file(s) changed:`));
         events.forEach(e => {
-          const icon = e.type === 'add' ? '➕' : e.type === 'change' ? '📝' : '🗑️';
+          const icon =
+            e.type === 'add' ? '➕' :
+            e.type === 'addDir' ? '📁' :
+            e.type === 'change' ? '📝' :
+            '🗑️';
           console.log(chalk.gray(`   ${icon} ${e.path}`));
         });
 
